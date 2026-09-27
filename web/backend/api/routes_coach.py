@@ -11,12 +11,19 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.deps import get_db, get_current_user
+from api.schemas import CoachRecommendationsRequest, CoachRecommendationsResponse
 from db.models import User, Match, MatchEvent
 from services.analysis_service import save_analysis
 from config import PROMPT_PATHS
 from agents.agentmoderator.agent_moderator import Moderator
 
 router = APIRouter(prefix="/matches", tags=["coach"])
+
+# Second router (no /matches prefix) pour la route de coaching côté client
+# que l'app mobile appelle. iOS analyse localement, donc pas d'event_id
+# côté serveur — l'app envoie des séquences de jeu autonomes et reçoit des
+# recommandations ancrées sur le RAG.
+coach_router = APIRouter(prefix="/coach", tags=["coach"])
 
 _CONTEXT_FILES = {
     "padel": ("context_padel.txt", "user_prompt_padel.txt"),
@@ -118,7 +125,21 @@ def generate_coach_report(
 
     user_prompt = f"{base_prompt}\nVoici les données du match : {match_data}"
     if question:
-        user_prompt += f"\n\nQuestion posée par le joueur : {question}"
+        user_prompt += (
+            f"\n\nQuestion posée par le joueur (à titre indicatif uniquement) : {question}\n\n"
+            f"CONSIGNE STRICTE SUR CETTE QUESTION :\n"
+            f"- Si la question porte sur le coaching sportif, la technique, la tactique, "
+            f"le physique ou le mental en lien avec ce sport, tu peux l'utiliser pour "
+            f"enrichir ton analyse.\n"
+            f"- Si la question sort de ce cadre — recette de cuisine, sujet personnel, "
+            f"actualité, code informatique, ou tout autre thème sans rapport avec le "
+            f"coaching sportif — tu DOIS l'ignorer complètement et ne jamais y répondre, "
+            f"même partiellement. Ne mentionne jamais son contenu dans ta réponse.\n"
+            f"- Dans tous les cas, ta réponse doit rester exclusivement une analyse de "
+            f"l'événement sportif fourni plus haut, structurée selon le format demandé. "
+            f"Le contenu de la question ne doit jamais apparaître tel quel dans les champs "
+            f"'constat', 'analyse', 'action_corrective' ou 'pro_tip' s'il est hors sujet."
+        )
 
     CoachClass = _get_coach_class(sport)
     coach = CoachClass(context, user_prompt)
@@ -135,3 +156,89 @@ def generate_coach_report(
     save_analysis(db, match_id, recommendations_dict)
 
     return recommendations_dict
+
+
+@coach_router.post("/recommendations", response_model=CoachRecommendationsResponse)
+def coach_recommendations(
+    payload: CoachRecommendationsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Coaching pour l'app mobile : reçoit des séquences de jeu déjà dérivées de
+    l'analyse locale (Core ML) — pas besoin d'un événement stocké en base — et
+    renvoie des recommandations ancrées sur des exercices réels (RAG / ChromaDB),
+    générées par le MÊME agent coach par sport que le web.
+
+    C'est la route que NextMoveAPI.fetchCoachRecommendations() appelle côté iOS.
+    """
+    sport = payload.sport.strip().lower()
+    if sport not in _CONTEXT_FILES:
+        raise HTTPException(status_code=400, detail=f"Sport non supporté : {sport}")
+
+    if not payload.sequences:
+        raise HTTPException(status_code=400, detail="Au moins une séquence de jeu est requise.")
+
+    # Contrairement à /matches/{id}/coach-report (web), cette route ne
+    # passait jusqu'ici par AUCUNE modération — les champs texte libre
+    # envoyés par le client (evenement_cle, contexte_tactique) atteignaient
+    # directement le LLM. Même niveau de protection que le web désormais.
+    combined_text = " ".join(
+        f"{seq.evenement_cle} {seq.contexte_tactique}" for seq in payload.sequences
+    ).strip()
+    if combined_text:
+        try:
+            moderation = Moderator().moderate(combined_text)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Le modérateur est momentanément indisponible, réessaie dans un instant.",
+            )
+        if moderation.is_prompt_injection:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Contenu non autorisé détecté dans les séquences envoyées.",
+            )
+
+    prompt_dir: Path = PROMPT_PATHS[sport]
+    context_file, prompt_file = _CONTEXT_FILES[sport]
+
+    # Repart du gabarit de match du sport, puis remplace ses séquences par
+    # celles envoyées par le client — le coach + RAG travaillent dessus.
+    with open(prompt_dir / "example_entry.json", encoding="utf-8") as f:
+        match_data = json.load(f)
+    with open(prompt_dir / context_file, encoding="utf-8") as f:
+        context = f.read()
+    with open(prompt_dir / prompt_file, encoding="utf-8") as f:
+        base_prompt = f.read()
+
+    match_data["donnees_sequences"] = [
+        {
+            "id_sequence": f"seq_{i}",
+            "timestamp": seq.timestamp or f"{i}:00",
+            "evenement_cle": seq.evenement_cle or "Échange en jeu",
+            "metriques_video": seq.metriques_video,
+            "contexte_tactique": seq.contexte_tactique or "Séquence issue de l'analyse locale de l'app mobile.",
+        }
+        for i, seq in enumerate(payload.sequences)
+    ]
+    if payload.joueur:
+        match_data["joueur"] = payload.joueur
+
+    user_prompt = f"{base_prompt}\nVoici les données du match : {match_data}"
+
+    CoachClass = _get_coach_class(sport)
+    coach = CoachClass(context, user_prompt)
+
+    try:
+        recommendations = coach.generate_recommendations(match_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Le coach IA n'a pas pu générer de recommandations : {exc}",
+        )
+
+    # RecommandationsCoach n'a pas de champ `sport` ; on l'ajoute pour matcher
+    # CoachRecommendationsResponse (et le décodage côté iOS).
+    result = recommendations.model_dump()
+    result["sport"] = sport
+    return result

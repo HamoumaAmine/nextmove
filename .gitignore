@@ -10,3 +10,7 @@ web/frontend/.env.local
 
 .DS_Store
 *.log
+
+
+web/backend/cookies.txt
+web/backend/*_payload.json

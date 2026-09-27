@@ -7,19 +7,21 @@ externes — en premier lieu l'application iOS. Le web (Streamlit) et l'API
 partagent donc le MÊME backend : un compte créé d'un côté fonctionne de l'autre.
 
 Lancement en local :
-    uvicorn src.api.main:app --reload --port 8000
+    uvicorn api.main:app --reload --port 8000
 Documentation interactive :
     http://localhost:8000/docs
 """
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from config import CORS_ORIGINS, AUTH_COOKIE_NAME
 from api.routes_export import router as export_router
 from api.routes_auth import router as auth_router
 from api.routes_matches import router as matches_router
-from api.routes_coach import router as coach_router
+from api.routes_coach import router as coach_report_router, coach_router
 from api.routes_chat import router as chat_router
 from api.routes_training import router as training_router
 
@@ -33,18 +35,39 @@ app = FastAPI(
 # pour que le cookie httpOnly d'authentification soit envoyé par le
 # navigateur), la spécification CORS interdit "*" comme origine — il faut
 # lister explicitement les origines autorisées.
-# TODO: ajouter ici le vrai domaine de production une fois déployé.
+# Les domaines de déploiement se configurent via CORS_ORIGINS.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def protect_cookie_writes(request: Request, call_next):
+    """Les écritures par cookie doivent provenir du frontend autorisé.
+
+    Les clients natifs avec Bearer restent indépendants des cookies/CORS.
+    Contrôle aussi l'origine des connexions navigateur (login CSRF).
+    """
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+        has_cookie = AUTH_COOKIE_NAME in request.cookies
+        auth_action = request.url.path in {"/auth/login", "/auth/register", "/auth/logout"}
+        if not bearer and (has_cookie or auth_action):
+            allowed = origin in CORS_ORIGINS or origin == str(request.base_url).rstrip("/")
+            if (origin and not allowed) or (has_cookie and not origin and not auth_action):
+                return JSONResponse(status_code=403, content={"detail": "Origine non autorisée"})
+    return await call_next(request)
+
+
 app.include_router(auth_router)
 app.include_router(matches_router)
-app.include_router(coach_router)
+app.include_router(coach_report_router)   # POST /matches/{id}/coach-report (web)
+app.include_router(coach_router)          # POST /coach/recommendations (mobile, RAG-grounded)
 app.include_router(chat_router)
 app.include_router(training_router)
 app.include_router(export_router)
