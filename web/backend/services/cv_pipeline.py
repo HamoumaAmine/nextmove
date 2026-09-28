@@ -39,6 +39,7 @@ import cv2
 import numpy as np
 
 from services.video_storage import get_supabase_client, BUCKET_NAME
+from services.ios_tracker import Detection as _TrackDetection, ball_trajectories, track_detections
 
 logger = logging.getLogger("nextmove.cv_pipeline")
 
@@ -56,8 +57,8 @@ _SPORT_WEIGHTS = {
 # Bornes d'échantillonnage : suffisant pour caractériser une courte séquence
 # (usage attendu de l'app, cf. page Upload) sans faire tourner l'inférence
 # pendant des minutes sur un long fichier envoyé par erreur.
-SAMPLE_FPS = 4.0
-MAX_SAMPLED_FRAMES = 200
+SAMPLE_FPS = 5.0
+MAX_SAMPLED_FRAMES = 300
 
 # Seuils de confiance repris des configs d'entraînement (training/configs/
 # *_yolo.yaml, section "Validation") : la balle padel y est documentée comme
@@ -169,6 +170,7 @@ class _FrameDetections:
     ball_xy: Optional[tuple]  # (x, y) normalisé 0-100, ou None si non détectée
     ball_conf: float
     player_xys: list = field(default_factory=list)  # [(x, y), ...] normalisés 0-100
+    track_inputs: list = field(default_factory=list)  # détections avec rectangles 0-1, pour le suivi iOS
 
 
 def _sample_and_detect(video_path: Path, model, sport: str) -> tuple[list, float]:
@@ -203,6 +205,8 @@ def _sample_and_detect(video_path: Path, model, sport: str) -> tuple[list, float
 
             best_ball_xy, best_ball_conf = None, -1.0
             player_xys = []
+            track_inputs = []
+            frame_index = len(detections)  # index contigu des images retenues, comme iOS
             for box in result.boxes:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
@@ -214,7 +218,24 @@ def _sample_and_detect(video_path: Path, model, sport: str) -> tuple[list, float
                 elif cls_id in player_ids:
                     player_xys.append((cx, cy))
 
-            detections.append(_FrameDetections(t=t, ball_xy=best_ball_xy, ball_conf=max(best_ball_conf, 0.0), player_xys=player_xys))
+                # Toutes les détections (balle ET joueurs) avec leur rectangle normalisé
+                # 0-1, pour le suivi aligné sur iOS (services/ios_tracker.py).
+                if cls_id in ball_ids:
+                    track_cls = "ball"
+                elif cls_id in player_ids:
+                    track_cls = "player"
+                else:
+                    continue
+                track_inputs.append(_TrackDetection(
+                    frame=frame_index, cls=track_cls,
+                    box=(x1 / w, y1 / h, x2 / w, y2 / h),
+                    confidence=conf, t=t,
+                ))
+
+            detections.append(_FrameDetections(
+                t=t, ball_xy=best_ball_xy, ball_conf=max(best_ball_conf, 0.0),
+                player_xys=player_xys, track_inputs=track_inputs,
+            ))
     finally:
         cap.release()
 
@@ -290,6 +311,28 @@ def analyze_video(sport: str, storage_path: str) -> VideoAnalysis:
         detections, duration = _sample_and_detect(video_path, model, sport)
     finally:
         video_path.unlink(missing_ok=True)
+
+    # Aperçu du suivi aligné sur iOS (étape 3b) : n'influence pas encore les
+    # résultats ; sert à comparer le nombre de pistes aux vidéos de référence.
+    try:
+        _all_inputs = [d for f in detections for d in f.track_inputs]
+        _ball_tracks = ball_trajectories(track_detections(_all_inputs))
+        _log = logging.getLogger("uvicorn.error")
+        _log.info(
+            "Suivi iOS (apercu) : %d images, %d detections de balle, %d pistes de balle (>= 2 points)",
+            len(detections), sum(1 for d in _all_inputs if d.cls == "ball"), len(_ball_tracks),
+        )
+        for _i, _tr in enumerate(_ball_tracks, 1):
+            _xs = [c[0] for c in _tr.trajectory]
+            _ys = [c[1] for c in _tr.trajectory]
+            _move = ((max(_xs) - min(_xs)) ** 2 + (max(_ys) - min(_ys)) ** 2) ** 0.5
+            _log.info(
+                "  piste %d : %d points, images %d-%d, deplacement %.3f, position moyenne (%.2f, %.2f)",
+                _i, len(_tr.detections), _tr.start_frame, _tr.end_frame, _move,
+                sum(_xs) / len(_xs), sum(_ys) / len(_ys),
+            )
+    except Exception:
+        logger.exception("Apercu du suivi iOS impossible (sans effet sur l'analyse)")
 
     segments = _segment_rallies(detections)
     if not segments:
@@ -372,7 +415,6 @@ def analyze_video(sport: str, storage_path: str) -> VideoAnalysis:
         patterns_summary=patterns_summary,
         events=events,
     )
-
 
 def _color_for_score(score: float) -> str:
     if score >= 4.0:
