@@ -3,7 +3,13 @@ Export PDF d'un match — génère un document structuré côté serveur via un
 vrai navigateur headless (Playwright/Chromium), ce qui permet d'utiliser du
 CSS moderne (Flexbox, couleurs, coins arrondis) sans les limitations d'un
 convertisseur HTML->PDF classique comme xhtml2pdf.
+
+Le navigateur Chromium est coûteux à démarrer (plusieurs secondes) : plutôt
+que d'en relancer un à chaque export, une seule instance est gardée ouverte
+et réutilisée pour tous les exports, protégée par un verrou pour éviter d'en
+démarrer plusieurs en parallèle sur les premières requêtes concurrentes.
 """
+import threading
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,6 +22,21 @@ from db.models import User, Match
 
 router = APIRouter(prefix="/matches", tags=["export"])
 
+_playwright = None
+_browser = None
+_browser_lock = threading.Lock()
+
+
+def _get_browser():
+    """Démarre Playwright et Chromium une seule fois, puis les réutilise."""
+    global _playwright, _browser
+    with _browser_lock:
+        if _browser is None or not _browser.is_connected():
+            if _playwright is None:
+                _playwright = sync_playwright().start()
+            _browser = _playwright.chromium.launch()
+        return _browser
+
 
 def _render_html(match: Match) -> str:
     """Construit le document HTML/CSS — rendu par un vrai Chromium, donc
@@ -27,7 +48,7 @@ def _render_html(match: Match) -> str:
         skills_html += f"""
         <div class="skill-row">
             <div class="skill-top">
-                <span class="skill-label">{skill.get('icon', '')} {skill.get('label', '')}</span>
+                <span class="skill-label">{skill.get('label', '')}</span>
                 <span class="skill-score">{score}</span>
             </div>
             <div class="bar-bg"><div class="bar-fill green" style="width:{pct}%;"></div></div>
@@ -92,7 +113,6 @@ def _render_html(match: Match) -> str:
             display: flex; align-items: center; gap: 8px;
             margin-bottom: 14px; font-size: 13px; font-weight: bold; color: #1C1C1E;
         }}
-        .brand-emoji {{ font-size: 18px; }}
 
         .header {{
             background: linear-gradient(135deg, #34C759, #28B84C);
@@ -158,7 +178,7 @@ def _render_html(match: Match) -> str:
     </style>
     </head>
     <body>
-        <div class="brand"><span class="brand-emoji">🏓</span> NextMove</div>
+        <div class="brand">NextMove</div>
 
         <div class="header">
             <h1>{match.title}</h1>
@@ -224,16 +244,17 @@ def export_match_pdf(
 
     html = _render_html(match)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
+    browser = _get_browser()
+    page = browser.new_page()
+    try:
         page.set_content(html, wait_until="networkidle")
         pdf_bytes = page.pdf(
             format="A4",
             print_background=True,
             margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
         )
-        browser.close()
+    finally:
+        page.close()
 
     safe_title = match.title.replace(" ", "_")
     return Response(

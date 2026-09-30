@@ -204,6 +204,9 @@ export const api = {
 
   getMatches: () => request<Match[]>("/matches"),
 
+  getMatchVideoUrl: (matchId: string) =>
+    request<{ video_url: string }>(`/matches/${matchId}/video-url`),
+
   getMatch: (matchId: string) => request<MatchDetail>(`/matches/${matchId}`),
 
   getMatchEvents: (matchId: string) => request<MatchEvent[]>(`/matches/${matchId}/events`),
@@ -221,6 +224,9 @@ export const api = {
 
   deleteMatch: (matchId: string) =>
     request<void>(`/matches/${matchId}`, { method: "DELETE" }),
+
+  deleteTrainingPlan: (planId: string) =>
+    request<void>(`/training-plan/${planId}`, { method: "DELETE" }),
 
   chatWithCoach: (matchId: string, message: string, history: ChatTurn[]) =>
     request<ChatResponse>(`/matches/${matchId}/chat`, {
@@ -240,5 +246,6 @@ export const api = {
   getTrainingPlans: (sport?: string) =>
     request<TrainingPlan[]>(`/training-plan${sport ? `?sport=${sport}` : ""}`),
 };
+
 
 export { ApiError };
