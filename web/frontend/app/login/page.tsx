@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
@@ -44,8 +45,7 @@ export default function LoginPage() {
     <div className="flex flex-col flex-1 items-center justify-center p-6">
       <div className="bg-nm-card rounded-nm-card shadow-sm p-8 w-full max-w-sm">
         <div className="text-center mb-6">
-          <div className="text-4xl mb-2">🏓</div>
-          <h1 className="text-2xl font-bold text-nm-text">NextMove</h1>
+          <Image src="/logo-full.png" alt="NextMove" width={280} height={144} className="mx-auto rounded-2xl mb-2" priority />
         </div>
 
         {/* Sélecteur Login / Register */}
