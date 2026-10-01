@@ -18,6 +18,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pré-télécharge le modèle d'embeddings DANS l'image Docker elle-même (pas
+# dans un conteneur éphémère) : évite un échec de connexion réseau à
+# Hugging Face à chaque démarrage du serveur en production. Voir le
+# commentaire dans agents/agentmanager/rag.py qui exige explicitement
+# cette étape.
+RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
+
 RUN playwright install --with-deps chromium
 
 COPY . .
