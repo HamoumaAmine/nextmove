@@ -42,8 +42,8 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         value=token,
         max_age=COOKIE_MAX_AGE,
         httponly=True,
-        samesite="lax",
-        secure=False,  # TODO: passer à True en production (HTTPS)
+        samesite="none",
+        secure=True,  # TODO: passer à True en production (HTTPS)
     )
 
 
