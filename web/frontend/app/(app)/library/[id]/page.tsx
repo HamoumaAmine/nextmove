@@ -78,11 +78,12 @@ export default function MatchDashboardPage() {
       .catch(() => setVideoUrl(null));
   }, [id, match?.status]);
 
-  async function handleStartAnalysis() {
+    async function handleStartAnalysis() {
     if (!id) return;
     setIsStartingAnalysis(true);
     try {
-      const updated = await api.analyzeMatch(id);
+      await api.analyzeMatch(id);
+      const updated = await api.getMatch(id);
       setMatch(updated);
       // Relance le polling maintenant que le statut est passé à "processing".
       if (!intervalRef.current) {
