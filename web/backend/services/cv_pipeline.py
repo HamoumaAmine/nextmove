@@ -52,8 +52,7 @@ from services import skill_scoring as sk
 
 logger = logging.getLogger("nextmove.cv_pipeline")
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-WEIGHTS_DIR = Path(os.environ.get("CV_WEIGHTS_DIR", str(_REPO_ROOT / "training" / "models" / "exported")))
+WEIGHTS_DIR = Path(os.environ.get("CV_WEIGHTS_DIR", str(Path(__file__).resolve().parent.parent / "models")))
 
 _SPORT_WEIGHTS = {
     "padel": WEIGHTS_DIR / "padel_best.pt",
