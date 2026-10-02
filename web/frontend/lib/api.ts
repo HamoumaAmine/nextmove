@@ -4,6 +4,7 @@ export interface ApiUser {
   id: string;
   email: string;
   preferred_sport: string;
+  email_verified: boolean;
   created_at: string;
 }
 
@@ -201,6 +202,27 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ preferred_sport: preferredSport }),
     }),
+  
+  verifyEmail: (code: string) =>
+    request<{ status: string }>("/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  resendVerification: () =>
+    request<{ status: string }>("/auth/resend-verification", { method: "POST" }),
+
+  forgotPassword: (email: string) =>
+    request<{ status: string }>("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<{ status: string }>("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ email, code, new_password: newPassword }),
+    }), 
 
   getMatches: () => request<Match[]>("/matches"),
 

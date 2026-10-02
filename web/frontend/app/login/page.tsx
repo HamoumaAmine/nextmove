@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
@@ -30,10 +31,13 @@ export default function LoginPage() {
     try {
       if (mode === "login") {
         await login(email, password);
+        router.push("/library");
       } else {
         await register(email, password, sport);
+        // Un compte fraîchement créé n'a jamais email_verified à true :
+        // on envoie systématiquement confirmer l'email avant la bibliothèque.
+        router.push("/verify-email");
       }
-      router.push("/library");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Une erreur est survenue.");
     } finally {
@@ -84,7 +88,14 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-nm-text mb-1">Mot de passe</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-nm-text">Mot de passe</label>
+              {mode === "login" && (
+                <Link href="/forgot-password" className="text-xs text-nm-green hover:underline">
+                  Mot de passe oublié ?
+                </Link>
+              )}
+            </div>
             <input
               type="password"
               required
