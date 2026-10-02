@@ -10,7 +10,7 @@ import os
 
 import resend
 
-FROM_ADDRESS = "NextMove <onboarding@resend.dev>"
+FROM_ADDRESS = "NextMove <noreply@nextmoveapp.lol>"
 
 
 def _ensure_api_key() -> None:
