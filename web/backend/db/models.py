@@ -34,7 +34,7 @@ class User(Base):
 
     matches = relationship("Match", back_populates="user", cascade="all, delete-orphan")
     training_plans = relationship("TrainingPlan", back_populates="user", cascade="all, delete-orphan")
-    verification_codes = relationship("VerificationCode", cascade="all, delete-orphan")
+    verification_codes = relationship("VerificationCode", back_populates="user", cascade="all, delete-orphan")
 
 
 class Match(Base):
@@ -62,6 +62,8 @@ class Match(Base):
     highlights = Column(JSON, nullable=True)  # [{title, time, tag, tag_class}, ...]
     insights = Column(JSON, nullable=True)    # [{color, text}, ...]
     patterns_summary = Column(JSON, nullable=True)  # {total_events, phase_distribution, zone_distribution, ...}
+    players = Column(JSON, nullable=True)                   # joueurs détectés : [{index, label, vignette, stats}, ...]
+    selected_player_index = Column(Integer, nullable=True)  # joueur choisi par l'utilisateur
 
     video_storage_path = Column(String(500), nullable=True)  # chemin dans le bucket Supabase Storage
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -154,4 +156,4 @@ class VerificationCode(Base):
     used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    user = relationship("User")
+    user = relationship("User", back_populates="verification_codes")
